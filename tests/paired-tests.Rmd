@@ -173,7 +173,7 @@ Test different experiment designs.
 First, the simplest design - no patient ID. 
 
 ```{r}
-design <- model.matrix(~ 0 + condition)
+design <- model.matrix(~ condition)
 y <- DGEList(counts_treated, group=group)
 y <- estimateDisp(y, design, robust=TRUE)
 fit <- glmQLFit(y, design, robust=TRUE)
