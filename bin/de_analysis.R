@@ -16,10 +16,15 @@ cts <- as.matrix(read.csv("merged/all_counts.tsv", sep="\t", row.names="Referenc
 
 # Set up sample data frame:
 #changed this to sample_id
-coldata <- read.csv("de_analysis/coldata.tsv", row.names="alias", sep=",", stringsAsFactors=TRUE)
-
+coldata <- read.csv("de_analysis/coldata.tsv", row.names="alias",
+                    sep=",", stringsAsFactors=TRUE)
 coldata$sample_id <- rownames(coldata)
-coldata$condition <- factor(coldata$condition, levels=rev(levels(coldata$condition)))
+
+# FIX: this original line makes the treatment the reference!!
+# coldata$condition <- factor(coldata$condition,
+#                             levels=rev(levels(coldata$condition)))
+# Instead set the control as reference explicitly 
+coldata$condition <- relevel(coldata$condition, ref = "control")
 
 cat("Loading annotation database.\n")
 
@@ -52,8 +57,6 @@ d <- dmFilter(d, min_samps_gene_expr = min_samps_gene_expr, min_samps_feature_ex
 
 cat("Building model matrix.\n")
 design <- model.matrix(~condition, data=DRIMSeq::samples(d))
-
-
 
 suppressMessages(library("dplyr"))
 
