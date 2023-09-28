@@ -56,7 +56,10 @@ d <- dmFilter(d, min_samps_gene_expr = min_samps_gene_expr, min_samps_feature_ex
         min_gene_expr = min_gene_expr, min_feature_expr = min_feature_expr)
 
 cat("Building model matrix.\n")
-design <- model.matrix(~condition, data=DRIMSeq::samples(d))
+# this model matrix does not contain the sample ID, in case of paired tests 
+# design <- model.matrix(~condition, data=DRIMSeq::samples(d))
+# with paired: 
+design <- model.matrix(~ ID + condition, data = coldata)
 
 suppressMessages(library("dplyr"))
 
