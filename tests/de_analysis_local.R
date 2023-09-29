@@ -1,3 +1,6 @@
+rm(list = ls())
+# coldata <- read.csv("../../nextflow/sample_sheet.csv",
+#                     row.names="alias", sep=",", stringsAsFactors=TRUE)
 coldata <- read.csv("../../nextflow/sample_sheet_testPaired.csv",
                     row.names="alias", sep=",", stringsAsFactors=TRUE)
 coldata$sample_id <- rownames(coldata)
@@ -33,14 +36,14 @@ edger_res <- topTags(qlf, n=nrow(y), sort.by="PValue")[[1]]
 
 #write.table(as.data.frame(edger_res), file="results_dge_correct.tsv", sep="\t")
 
-plotMD(qlf)
-abline(h=c(-1,1), col="blue")
-plotQLDisp(fit)
-plotBCV(y)
+# plotMD(qlf)
+# abline(h=c(-1,1), col="blue")
+# plotQLDisp(fit)
+# plotBCV(y)
 
 #### make plots to test LFC direction 
 i <- 1
-png("test.png", width = 800)
+png(paste0("test", Sys.time(), ".png"), width = 800)
 par(mfrow = c(1,2))
 boxplot(counts ~ condition, 
         data = data.frame(counts = y$counts[rownames(edger_res)[i],],
