@@ -24,6 +24,10 @@ coldata$sample_id <- rownames(coldata)
 # coldata$condition <- factor(coldata$condition,
 #                             levels=rev(levels(coldata$condition)))
 # Instead set the control as reference explicitly 
+# check if control condition exists, sets as reference 
+if(!"control" %in% coldata$condition)
+  stop("sample_sheet.csv does not contain 'control' 
+       condition - unable to set reference")
 coldata$condition <- relevel(coldata$condition, ref = "control")
 
 cat("Loading annotation database.\n")
@@ -56,10 +60,14 @@ d <- dmFilter(d, min_samps_gene_expr = min_samps_gene_expr, min_samps_feature_ex
         min_gene_expr = min_gene_expr, min_feature_expr = min_feature_expr)
 
 cat("Building model matrix.\n")
-# this model matrix does not contain the sample ID, in case of paired tests 
+# the original model matrix does not contain the sample ID, in case of paired tests 
 # design <- model.matrix(~condition, data=DRIMSeq::samples(d))
-# with paired: 
-design <- model.matrix(~ ID + condition, data = coldata)
+
+# check if ID is specified in sample_sheet, if so include in model matrix design
+# to get 'paired t-test'
+if("ID" %in% colnames(coldata))
+  design <- model.matrix(~ ID + condition, data = coldata) else
+    design <- model.matrix(~ condition, data = coldata)
 
 suppressMessages(library("dplyr"))
 
@@ -92,7 +100,7 @@ for(j in 1:10)
   points(edger_res$logCPM[1], edger_res$logFC[1],
          col = 3)
 text(edger_res$logCPM[1], edger_res$logFC[1],
-     labels = rownames(edger_res)[1],col="black",cex=1,pos=3)
+     labels = rownames(edger_res)[1], pos=3)
 boxplot(counts ~ condition, 
         data = data.frame(counts = y$counts[rownames(edger_res)[1],],
                           condition = coldata$condition),
