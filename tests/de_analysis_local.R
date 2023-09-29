@@ -16,8 +16,10 @@ gene_cts <- read.delim("../../nextflow/de_analysis/all_gene_counts.tsv")
 
 #design <- model.matrix(~ 0 + ID + condition, data = coldata)
 #design <- model.matrix(~ 0 + condition, data = coldata)
-#design <- model.matrix(~ ID + condition, data = coldata)
-design <- model.matrix(~ condition, data = coldata)
+
+if("ID" %in% colnames(coldata))
+  design <- model.matrix(~ ID + condition, data = coldata) else
+    design <- model.matrix(~ condition, data = coldata)
 
 library("edgeR")
 
@@ -29,13 +31,14 @@ head(fit$coefficients)
 qlf <- glmQLFTest(fit)
 edger_res <- topTags(qlf, n=nrow(y), sort.by="PValue")[[1]]
 
-write.table(as.data.frame(edger_res), file="results_dge_correct.tsv", sep="\t")
+#write.table(as.data.frame(edger_res), file="results_dge_correct.tsv", sep="\t")
 
 plotMD(qlf)
 abline(h=c(-1,1), col="blue")
 plotQLDisp(fit)
 plotBCV(y)
 
+#### make plots to test LFC direction 
 i <- 1
 png("test.png", width = 800)
 par(mfrow = c(1,2))
