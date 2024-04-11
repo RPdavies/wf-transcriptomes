@@ -6,23 +6,34 @@ process map_reads{
     */
     label "isoforms"
     cpus params.threads
+    memory "31 GB"
 
     input:
        tuple val(sample_id), path (fastq_reads), path(index), path(reference)
 
     output:
-       tuple val(sample_id), path("${sample_id}_reads_aln_sorted.bam"), emit: bam
+       tuple val(sample_id), 
+             path("${sample_id}_reads_aln_sorted.bam"), 
+             path("${sample_id}_reads_aln_sorted.bam.bai"),
+             emit: bam
        tuple val(sample_id), path("${sample_id}_read_aln_stats.tsv"), emit: stats
     script:
         def ContextFilter = """AlnContext: { Ref: "${reference}", LeftShift: -${params.poly_context},
         RightShift: ${params.poly_context}, RegexEnd: "[Aa]{${params.max_poly_run},}",
         Stranded: True,Invert: True, Tsv: "internal_priming_fail.tsv"} """
+
+        def mm2_threads = Math.max(task.cpus - 3, 1)
     """
-    minimap2 -t ${params.threads} -ax splice ${params.minimap2_opts} ${index} ${fastq_reads}\
+    minimap2 -t ${mm2_threads} -ax splice ${params.minimap2_opts} ${index} ${fastq_reads}\
         | samtools view -q ${params.minimum_mapping_quality} -F 2304 -Sb -\
-        | seqkit bam -j ${params.threads} -x -T '${ContextFilter}' -\
-        | samtools sort -@ ${params.threads} -o "${sample_id}_reads_aln_sorted.bam" - ;
-    ((cat "${sample_id}_reads_aln_sorted.bam" | seqkit bam -s -j ${params.threads} - 2>&1)  | tee ${sample_id}_read_aln_stats.tsv ) || true
+        | seqkit bam -j 1 -x -T '${ContextFilter}' -\
+        | samtools sort --write-index -@ 1 -o "${sample_id}_reads_aln_sorted.bam##idx##${sample_id}_reads_aln_sorted.bam.bai" - ;
+    ((cat "${sample_id}_reads_aln_sorted.bam" | seqkit bam -s -j 1 - 2>&1)  | tee ${sample_id}_read_aln_stats.tsv ) || true
+
+    # Add sample id header and column
+    sed "s/\$/${sample_id}/" "${sample_id}_read_aln_stats.tsv" \
+        | sed "1 s/${sample_id}/sample_id/" > tmp
+    mv tmp "${sample_id}_read_aln_stats.tsv"
 
     if [[ -s "internal_priming_fail.tsv" ]];
         then

@@ -2,36 +2,70 @@
 
 suppressMessages(library("DRIMSeq"))
 suppressMessages(library("GenomicFeatures"))
+suppressMessages(library("edgeR"))
 args <- commandArgs(trailingOnly=TRUE)
 ref_annotation <- args[1]
-min_samps_gene_expr <- args[2]
-min_samps_feature_expr <- args[3]
-min_gene_expr <- args[4] 
-min_feature_expr <- args[5]
-annotation_type <- args[6]
-strip_version <- args[7]
+min_samps_gene_expr <- as.numeric(args[2])
+min_samps_feature_expr <- as.numeric(args[3])
+min_gene_expr <- as.numeric(args[4]) 
+min_feature_expr <- as.numeric(args[5])
 
 cat("Loading counts, conditions and parameters.\n")
-cts <- as.matrix(read.csv("merged/all_counts.tsv", sep="\t", row.names="Reference", stringsAsFactors=FALSE))
+cts <- as.matrix(read.csv("all_counts.tsv", sep="\t", row.names="Reference", stringsAsFactors=FALSE))
 
 # Set up sample data frame:
 #changed this to sample_id
-coldata <- read.csv("de_analysis/coldata.tsv", row.names="alias", sep=",", stringsAsFactors=TRUE)
+coldata <- read.csv("sample_sheet.csv", row.names="alias", sep=",", stringsAsFactors=TRUE)
 
 coldata$sample_id <- rownames(coldata)
-coldata$condition <- factor(coldata$condition, levels=rev(levels(coldata$condition)))
+# check if control condition exists, sets as reference 
+if(!"control" %in% coldata$condition)
+  stop("sample_sheet.csv does not contain 'control' 
+       condition - unable to set reference.")
+coldata$condition <- relevel(coldata$condition, ref = "control")
+
+# a .gff annotation file extension may be gff2(gtf) or gff3 so check in files for use of = in the attribute field
+# if '=' present it is gff3 if not it is gtf.
+# see https://www.ensembl.org/info/website/upload/gff.html
+# and http://gmod.org/wiki/GFF2#Converting_GFF2_to_GFF3
+cat("Checking annotation file type.\n")
+lines <- readLines(file(ref_annotation), n=10000)
+# If transcript_id containing '=' (format eg. transcript_id=xxx)
+# annotation type is gff3
+check_file_type <- sum(grepl("transcript_id=", lines))
+if (check_file_type != 0){
+    cat("Annotation file type is gff3.\n")
+    annotation_type <- "gff3"
+} else {
+    # otherwise gtf
+    cat("Annotation file type is gtf.\n")
+    annotation_type <- "gtf"
+}
+
+# Transcript_id versions (eg. ENTXXX.1, eg. ENTXXX.2) represent how many times that transcript reference has been changed 
+# during its time in the database.
+# Not all annotation files include it as part of the transcript_id - notably Ensembl
+# The following handles this.
+cat("Checking annotation file for presence of transcript_id versions.\n")
+# Get the first transcript_id from the annotation file by parsing
+lines <- readLines(file(ref_annotation), n=100000)
+# Find transcript_ids in first 1000 lines and check if they contain dot (format eg. ENTXXX.1)
+check_version <- sum(grepl("transcript_id[^;]+\\.", lines))
+if (check_version != 0){
+        # we do not need to strip the count file rows if ref_annotation includes versions
+        cat("Annotation file transcript_ids include versions.\n")
+    } else {
+       # otherwise remove the versions
+        rownames(cts) <- lapply(rownames(cts),  sub, pattern = "\\.\\d+$", replacement = "")
+        cat("Annotation file transcript_ids do not include versions so also strip versions from the counts df.\n")
+    }
 
 cat("Loading annotation database.\n")
-
 txdb <- makeTxDbFromGFF(ref_annotation,  format = annotation_type)
 txdf <- select(txdb, keys(txdb,"GENEID"), "TXNAME", "GENEID")
 tab <- table(txdf$GENEID)
 txdf$ntx<- tab[match(txdf$GENEID, names(tab))]
 
-
-if (strip_version == "true"){
-  rownames(cts) <- lapply(rownames(cts),  sub, pattern = "\\.\\d+$", replacement = "")
-}
 
 cts <- cts[rownames(cts) %in% txdf$TXNAME, ] # FIXME: filter for transcripts which are in the annotation. Why they are not all there? 
 
@@ -41,6 +75,9 @@ rownames(txdf) <- NULL
 
 # Create counts data frame:
 counts<-data.frame(gene_id=txdf$GENEID, feature_id=txdf$TXNAME, cts)
+
+# output unfiltered version of the counts table now we have paired transcripts with gene ids
+write.table(counts, file="de_analysis/unfiltered_transcript_counts_with_genes.tsv", sep="\t", row.names = FALSE, quote=FALSE)
 
 cat("Filtering counts using DRIMSeq.\n")
 
@@ -60,15 +97,22 @@ suppressMessages(library("dplyr"))
 # Sum transcript counts into gene counts:
 cat("Sum transcript counts into gene counts.\n")
 trs_cts <- counts(d)
-write.table(trs_cts, file="merged/all_counts_filtered.tsv",sep="\t")
+write.table(trs_cts, file="merged/filtered_transcript_counts_with_genes.tsv", sep="\t", row.names = FALSE, quote=FALSE)
 
 gene_cts <- trs_cts_unfiltered %>% dplyr::select(c(1, 3:ncol(trs_cts)))  %>% group_by(gene_id) %>% summarise_all(tibble::lst(sum)) %>% data.frame()
 rownames(gene_cts) <- gene_cts$gene_id
 gene_cts$gene_id <- NULL
-write.table(gene_cts, file="merged/all_gene_counts.tsv",sep="\t")
+write.table(gene_cts, file="merged/all_gene_counts.tsv", sep="\t", quote=FALSE)
+
+# Output count per million of the gene counts using edgeR CPM
+cpm_gene_counts <- cpm(gene_cts)
+# Add gene_id as index column header
+cpm_gene_counts <- cbind(var_name = rownames(cpm_gene_counts), cpm_gene_counts)
+rownames(cpm_gene_counts) <- NULL
+colnames(cpm_gene_counts)[1] <- "gene_id"
+write.table(cpm_gene_counts, file="de_analysis/cpm_gene_counts.tsv", sep="\t", quote=FALSE, row.names = FALSE)
 
 # Differential gene expression using edgeR:
-suppressMessages(library("edgeR"))
 cat("Running differential gene expression analysis using edgeR.\n")
 
 y <- DGEList(gene_cts)
