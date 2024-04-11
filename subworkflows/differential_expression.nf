@@ -1,5 +1,7 @@
 process checkSampleSheetCondition {
     label "isoforms"
+    cpus 1
+    memory "2 GB"
     input:
         path "sample_sheet.csv"
     """
@@ -14,6 +16,7 @@ process count_transcripts {
     // library type is specified as forward stranded (-l SF) as it should have either been through pychopper or come from direct RNA reads.
     label "isoforms"
     cpus params.threads
+    memory "16 GB"
     input:
         tuple val(meta), path(bam), path(ref_transcriptome)
     output:
@@ -29,88 +32,80 @@ process count_transcripts {
 
 process mergeCounts {
     label "isoforms"
+    cpus 1
+    memory "2 GB"
     input:
         path counts
     output:
-        path "de_transcript_counts.tsv"
+        path "unfiltered_transcript_counts.tsv"
     """
-    workflow-glue merge_count_tsvs -z -o de_transcript_counts.tsv -tsvs ${counts}
+    workflow-glue merge_count_tsvs -z -o unfiltered_transcript_counts.tsv -tsvs ${counts}
     """
 }
 
 process mergeTPM {
     label "isoforms"
+    cpus 1
+    memory "2 GB"
     input:
         path counts
     output:
-        path "de_tpm_transcript_counts.tsv"
+        path "unfiltered_tpm_transcript_counts.tsv"
+    // Use tpm parameter with merge_counts_tsvs.py to out transcript per million file
     """
-    workflow-glue merge_count_tsvs -o de_tpm_transcript_counts.tsv -z -tpm True -tsvs $counts
+    workflow-glue merge_count_tsvs -o unfiltered_tpm_transcript_counts.tsv -z -tpm True -tsvs $counts
     """
 }
 
 
 process deAnalysis {
     label "isoforms"
-    errorStrategy "retry"
-    maxRetries 3
+    cpus 4
+    memory "16 GB"
     input:
-        path sample_sheet
-        path merged_tsv 
+        path "sample_sheet.csv"
+        path "all_counts.tsv" 
         path "annotation.gtf"
     output:
         path "de_analysis/results_dtu_stageR.tsv", emit: stageR
-        path "merged/all_counts_filtered.tsv", emit: flt_counts
+        path "merged/filtered_transcript_counts_with_genes.tsv", emit: flt_counts
+        path "de_analysis/unfiltered_transcript_counts_with_genes.tsv", emit: unflt_counts
         path "merged/all_gene_counts.tsv", emit: gene_counts
         path "de_analysis/results_dge.tsv", emit: dge
         path "de_analysis/results_dexseq.tsv", emit: dexseq
         path "de_analysis", emit: de_analysis
-    script:
-    // Just try both annotation file type because a .gff extension may be gff2(gtf) or gff3
-    String annotation_type = "gtf"
-    String strip_version  = "false"
-    if (task.attempt == 2){
-        annotation_type = "gff3"
-        strip_version  = "false"
-        log.info("Retry deAnalysis with gff format setting.")
-    }
-    else if (task.attempt == 3){
-        annotation_type = "gff3"
-        strip_version  = "true"
-        log.info("Retry deAnalysis with gff format setting and version removal.")
-    }
-    else if (task.attempt == 4){
-        strip_version  = "true"
-        log.info("Retry deAnalysis with gtf format setting and version removal.")
-    }
-
+        path "de_analysis/cpm_gene_counts.tsv", emit: cpm
     """
     mkdir merged
     mkdir de_analysis
-    mv $merged_tsv merged/all_counts.tsv
-    mv $sample_sheet de_analysis/coldata.tsv
-    de_analysis.R annotation.gtf $params.min_samps_gene_expr $params.min_samps_feature_expr $params.min_gene_expr $params.min_feature_expr $annotation_type $strip_version
+    de_analysis.R annotation.gtf $params.min_samps_gene_expr $params.min_samps_feature_expr $params.min_gene_expr $params.min_feature_expr
     """
 }
 
 
 process plotResults {
     label "isoforms"
+    cpus 2
+    memory "2 GB"
     input:
-        path flt_count
-        path res_dtu
-        path sample_sheet 
+        path "filtered_transcript_counts_with_genes.tsv"
+        path "results_dtu_stageR.tsv"
+        path "sample_sheet.tsv"
         path de_analysis
     output:
         path "de_analysis/dtu_plots.pdf", emit: dtu_plots
         path "sample_sheet.tsv", emit: sample_sheet_csv
+        // Output all DE files for use in report process
         path "de_analysis/*", emit: stageR
+        // Output selected DE files to be output in out_dir
+        path "de_analysis/results_dge.pdf", emit: dge_pdf
+        path "de_analysis/results_dge.tsv", emit: dge_tsv
+        path "de_analysis/results_dtu_gene.tsv", emit: dtu_gene
+        path "de_analysis/results_dtu_transcript.tsv", emit: dtu_transcript
+        path "de_analysis/results_dtu_stageR.tsv", emit: dtu_stageR
+        path "de_analysis/results_dtu.pdf", emit: dtu_pdf
     """
-    mkdir merged
-    mv $sample_sheet de_analysis/coldata.tsv
-    mv $flt_count merged/all_counts_filtered.tsv
     plot_dtu_results.R
-    mv de_analysis/coldata.tsv sample_sheet.tsv
     """
 }
 
@@ -120,6 +115,7 @@ process build_minimap_index_transcriptome{
     */
     label "isoforms"
     cpus params.threads
+    memory "16 GB"
     input:
         path reference
     output:
@@ -140,6 +136,7 @@ process map_transcriptome{
     */
     label "isoforms"
     cpus params.threads
+    memory "16 GB"
 
     input:
        tuple val(meta), path (fastq_reads), path(index)
@@ -169,15 +166,18 @@ workflow differential_expression {
         merged_TPM = mergeTPM(count_transcripts.out.counts.collect())
         analysis = deAnalysis(sample_sheet, merged, ref_annotation)
         plotResults(analysis.flt_counts, analysis.stageR, sample_sheet, analysis.de_analysis)
-        de_report = analysis.flt_counts.combine(analysis.gene_counts).combine(analysis.dge).combine(analysis.dexseq).combine(
-                    analysis.stageR).combine(plotResults.out.sample_sheet_csv).combine(merged).combine(
-                    ref_annotation).combine(merged_TPM)
+        // Concat files required for making the report
+        de_report = analysis.flt_counts.concat(analysis.gene_counts, analysis.dge, analysis.dexseq,
+        analysis.stageR, plotResults.out.sample_sheet_csv, merged, ref_annotation, merged_TPM, analysis.unflt_counts).collect()
+        // Concat files required to be output to user
+        de_outputs_concat = analysis.cpm.concat(plotResults.out.dtu_plots, plotResults.out.dge_pdf, plotResults.out.dge_tsv,
+        plotResults.out.dtu_gene, plotResults.out.dtu_transcript, plotResults.out.dtu_stageR, plotResults.out.dtu_pdf).collect()
         count_transcripts_file = count_transcripts.out.seqkit_stats.collect()
-        all_counts = merged_TPM.concat(merged, analysis.flt_counts, analysis.gene_counts)
+        all_counts = merged_TPM.concat(analysis.flt_counts, analysis.gene_counts)
 emit:
        all_de = de_report
        count_transcripts = count_transcripts_file
        dtu_plots = plotResults.out.dtu_plots
-       de_outputs = plotResults.out.stageR
+       de_outputs = de_outputs_concat
        counts = all_counts
 }

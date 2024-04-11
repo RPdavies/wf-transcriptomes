@@ -31,7 +31,7 @@ def argparser():
     """Argument parser for entrypoint."""
     parser = wf_parser("report")
     parser.add_argument("--report", help="Report output file")
-    parser.add_argument("--stats", help="Read stats file.")
+    parser.add_argument("--stats", help="Read stats files.", nargs='+')
     parser.add_argument(
         "--versions", required=True,
         help="directory containing CSVs containing name,version.")
@@ -51,20 +51,17 @@ def argparser():
         "--gff_annotation", required=False, nargs='+',
         help="transcriptome annotation gff file")
     parser.add_argument(
-        "--gffcompare_dir", required=False, default=None, nargs='*',
+        "--gffcompare_dir", required=False, default=None,
         help="gffcompare outout dir")
     parser.add_argument(
         "--pychop_report", required=False, default=None,
         help="TSV summary file of pychopper statistics")
     parser.add_argument(
-        "--sample_ids", required=True, nargs='+',
-        help="List of sample ids")
+        "--isoform_table", required=False, type=Path,
+        help="Path to directory of TSV files with isoform summaries")
     parser.add_argument(
         "--isoform_table_nrows", required=False, type=int, default=5000,
         help="Maximum rows to display in isoforms table")
-    parser.add_argument(
-        "--cluster_qc_dirs", required=False, type=str, default=None, nargs='*',
-        help="Directory with various cluster quality csvs")
     parser.add_argument(
         "--jaffal_csv", required=False, type=str, default=None,
         help="Path to JAFFAL results csv")
@@ -74,7 +71,6 @@ def argparser():
     parser.add_argument(
         "--de_stats", required=False, type=str, default=None, nargs='*',
         help="Differential expression report optional")
-    parser.add_argument('--denovo', dest='denovo', action='store_true')
 
     return parser
 
@@ -343,7 +339,7 @@ def grouped_bar(df, title="", tilted_xlabs=False):
     return p
 
 
-def gff_compare_plots(report, gffcompare_outdirs, sample_ids):
+def gff_compare_plots(report, gffcompare_outdirs):
     """Create various sections and plots in a WfReport.
 
     :param report: aplanat WFReport
@@ -381,7 +377,10 @@ def gff_compare_plots(report, gffcompare_outdirs, sample_ids):
 
     tabs = []
     gff_fails = False
-    for id_, dir_ in zip(sample_ids, gffcompare_outdirs):
+    sample_ids = []
+    for dir_ in gffcompare_outdirs:
+        sample_id = dir_.name
+        sample_ids.append(sample_id)  # Get sample ids fromt the folder name
         stats, _, miss, novel, total = \
             parse_gffcmp_stats(dir_ / 'str_merged.stats')
 
@@ -394,7 +393,7 @@ def gff_compare_plots(report, gffcompare_outdirs, sample_ids):
             tabs.append(Panel(
                 child=gridplot(
                     [bar_totals, bar_performance, bar_missed, bar_novel],
-                    ncols=2, width=350, height=260), title=id_))
+                    ncols=2, width=350, height=260), title=sample_id))
         else:
             gff_fails = True
 
@@ -443,7 +442,7 @@ def gff_compare_plots(report, gffcompare_outdirs, sample_ids):
 
     track_files = [x / 'str_merged.tracking' for x in gffcompare_outdirs]
 
-    df_tracking = load_sample_data(
+    df_tracking = load_data_add_sample_id(
         track_files, sample_ids,
         read_func=lambda x: pd.read_csv(
             x, sep="\t", header=None,
@@ -529,7 +528,7 @@ def gff_compare_plots(report, gffcompare_outdirs, sample_ids):
         sys.stderr("Cannot find .tmap files in {}".format(gffcompare_outdirs))
         return
 
-    df_tmap = load_sample_data(tmap_files, sample_ids)
+    df_tmap = load_data_add_sample_id(tmap_files, sample_ids)
 
     for id_, df in df_tmap.groupby('sample_id'):
 
@@ -549,8 +548,6 @@ def gff_compare_plots(report, gffcompare_outdirs, sample_ids):
     ### Read coverage by gffcompare transfrag class''')
     cover_panel = Tabs(tabs=tabs)
     section.plot(cover_panel)
-
-    return df_tmap
 
 
 def pychopper_plots(report, pychop_report):
@@ -596,64 +593,10 @@ def pychopper_plots(report, pychop_report):
     section.plot(grid)
 
 
-def cluster_quality(cluster_qc_dir, report, sample_ids):
-    """Make cluster quality section."""
-    section = report.add_section()
-    section.markdown('''
-    ### De novo clustering quality
-
-    This section shows plots relating to the clustering quality performed
-    by isONclust2. The full length reads are mapped to a reference genome
-    to create a ground truth of reads mapped to clusters. This is then compared
-    to the de novo-generated clusters, and the following statistics are
-    generated.
-
-    * [Homogeneity](https://scikit-learn.org/stable/modules/generated/
-    sklearn.metrics.homogeneity_score.html): Penalises over-clustering.
-
-    * [Completeness](https://scikit-learn.org/stable/modules/generated/
-    sklearn.metrics.completeness_score.html): Penalises under-clustering.
-
-    * [V-measure](https://clusteringjl.readthedocs.io/en/latest/vmeasure.html):
-    The harmonic mean of the homogeneity and completeness
-
-    * [Adjusted Rand Index](https://scikit-learn.org/stable/modules/generated/
-    sklearn.metrics.adjusted_rand_score.html): Intuitively,  measures the
-    percentage of read pairs correctly clustered, normalized so that a perfect
-    clustering = 1 and a random cluster assignment achieves = 0
-
-    * NonSingleton: Clusters with multiple reads
-    * Singleton: Clusters consisting of a single read (These do not contribute
-    to the final transcript calling - I need to check this!)
-
-    ''')
-
-    tabs = []
-    for id_, cluster_dir in zip(sample_ids, cluster_qc_dir):
-        plots = []
-        for fn in ['v_ari_com_hom.csv', 'sing_nonsing.csv']:
-            # Skip the next two plots for now
-            # 'class_sizes1.csv', 'class_sizes2.csv']:
-            df = pd.read_csv(Path(cluster_dir) / fn)
-            bar = bars.simple_bar(
-                df.Statistic.values.tolist(), df.Value.values.tolist(),
-                colors=Colors.cerulean
-            )
-            bar.xaxis.major_label_orientation = math.pi / 2.8
-            plots.append(bar)
-        tabs.append(Panel(
-            child=gridplot(plots, ncols=4,
-                    width=300, height=300), title=id_))
-
-    cover_panel = Tabs(tabs=tabs)
-    section.plot(cover_panel)
-
-
-def transcript_table(report, df_tmaps, max_rows):
+def transcript_table(report, isoform_table, max_rows):
     """Create searchable table of transcripts.
 
-    :param df_tmaps: pd.DataFrame of all gffcomapre `.tmap` files from all
-        samples
+    :param isoform_table: path to folder of isoform table files
     """
     section = report.add_section()
 
@@ -669,24 +612,11 @@ def transcript_table(report, df_tmaps, max_rows):
     `isoform_table_nrows`. It is currently set to `{}`
     '''.format(max_rows))
 
-    df = df_tmaps.drop(
-        columns=[
-            'FPKM', 'qry_gene_id', 'major_iso_id', 'ref_match_len', 'TPM'])
-
-    if len(df) == 0:
-        sys.stderr("No transcripts found")
-        section.markdown("No transcripts found")
-        return
-
-    # Make a column of number of isoforms in parent gene
-    gb = df.groupby(['ref_gene_id', 'sample_id']).count()
-    # gb = gb.set_index(['ref_gene_id', 'sample_id'])
-    gb.rename(columns={'ref_id': 'num_isoforms'}, inplace=True)
-
-    df['parent gene iso num'] = df.apply(
-        lambda x: gb.loc[(x.ref_gene_id, x.sample_id), 'num_isoforms'], axis=1)
-    # Uncalssified transcritps should not be lumped togetehr
-    df.loc[df.class_code == 'u', 'parent gene iso num'] = None
+    dfs = []
+    for file_ in Path(isoform_table).iterdir():
+        d = pd.read_csv(file_, sep='\t')
+        dfs.append(d)
+    df = pd.concat(dfs)
 
     # Keep top n rows with most coverage
     df.sort_values('cov', ascending=False, inplace=True)
@@ -699,21 +629,15 @@ def transcript_table(report, df_tmaps, max_rows):
     section.table(df, index=False)
 
 
-def transcriptome_summary(report, gffs, sample_ids, denovo=False):
+def transcriptome_summary(report, gffs):
     """
     Plot transcriptome summaries.
 
     Some of this data is available via gffcompare output, but the de novo
     pipeline skips that, so we do it all here.
 
-    We do not report exon number for the denovo assembly yet. This is because
-    in this case, the gff annotation is generated by aligning to the CDS not
-    the genome.
-
     :param report: aplanat WFReport
     :param gffs: list of paths to gff transcriptome annotations
-    :param sample_ids: list of sample ids
-    :param denovo: whether annotation was generated by de novo pipeline or not
     """
     # test.db gets written to the git repo.
     section = report.add_section()
@@ -722,7 +646,8 @@ def transcriptome_summary(report, gffs, sample_ids, denovo=False):
     ''')
 
     tabs = []
-    for id_, gff in zip(sample_ids, gffs):
+    for gff in gffs:
+        sample_id = Path(gff).name
 
         plots = []
 
@@ -766,22 +691,21 @@ def transcriptome_summary(report, gffs, sample_ids, denovo=False):
         plots.append(bar_isos)
 
         box = bars.boxplot_series(
-            [id_] * len(transcript_lens), transcript_lens,
+            [sample_id] * len(transcript_lens), transcript_lens,
             width=70, ylim=(min(transcript_lens), max(transcript_lens)),
             title='transcript lengths')
         plots.append(box)
 
-        if not denovo:
-            x, y = zip(*sorted(exons_per_transcript.items()))
+        x, y = zip(*sorted(exons_per_transcript.items()))
 
-            fig = figure(title="Exons per transcript")
-            fig.vbar(
-                x, top=list(y), color=Colors.cerulean)
-            fig.xaxis.axis_label = 'Num. exons'
-            fig.yaxis.axis_label = 'Num. genes'
+        fig = figure(title="Exons per transcript")
+        fig.vbar(
+            x, top=list(y), color=Colors.cerulean)
+        fig.xaxis.axis_label = 'Num. exons'
+        fig.yaxis.axis_label = 'Num. genes'
 
-            fig.xaxis.major_label_orientation = math.pi / 2.8
-            plots.append(fig)
+        fig.xaxis.major_label_orientation = math.pi / 2.8
+        plots.append(fig)
 
         df_sum = pd.DataFrame.from_dict(
             {'Total genes': [num_genes],
@@ -800,14 +724,14 @@ def transcriptome_summary(report, gffs, sample_ids, denovo=False):
 
         tabs.append(Panel(
             child=gridplot(plots, ncols=4,
-                           width=300, height=300), title=id_))
+                           width=300, height=300), title=sample_id))
 
     cover_panel = Tabs(tabs=tabs)
     section.plot(cover_panel)
 
 
-def load_sample_data(files, sample_ids, read_func=None):
-    """Load CSVs into dataframe, and assign sample_id column."""
+def load_data_add_sample_id(files, sample_ids, read_func=None):
+    """Load CSVs and concat into single into dataframe, and assign sample_id column."""
     df_ = pd.DataFrame()
     if not files:
         return None
@@ -823,18 +747,19 @@ def load_sample_data(files, sample_ids, read_func=None):
 
 def seq_stats_tabs(report, stats):
     """Make tabs of sequence summaries by sample."""
-    tabs = []
-    df_all = pd.read_csv(stats, sep="\t")
-    for sample_id, df_sample in df_all.groupby('sample_name'):
+    tabs = {}
+    for summary_fn in stats:
+        df_sample = pd.read_csv(summary_fn, sep="\t")
+        sample_id = df_sample['sample_name'].iloc[0]
         rlp = read_length_plot(df_sample)
         rqp = read_quality_plot(df_sample)
         grid = gridplot(
             [rlp, rqp], ncols=2, sizing_mode="stretch_width")
-        tabs.append(Panel(child=grid, title=sample_id))
+        tabs[sample_id] = Panel(child=grid, title=sample_id)
     section = report.add_section()
     section.markdown("""
     ### Sequence summaries""")
-    section.plot(Tabs(tabs=tabs))
+    section.plot(Tabs(tabs=[tabs.get(x) for x in sorted(tabs)]))
 
 
 def jaffal_table(report, result_csv):
@@ -853,7 +778,7 @@ def jaffal_table(report, result_csv):
         This section summarizes putative fusion transcripts identified
         by [JAFFAL](https://github.com/Oshlack/JAFFA/).
 
-        No fusion transcripts detected for current sample.
+        No fusion transcripts were detected for any of the samples.
         """)
     else:
         sid_col = df.pop('sample_id')
@@ -888,31 +813,39 @@ def de_section(report):
     dge = os.path.join("de_report", "results_dge.tsv")
     dtu = os.path.join("de_report", "results_dtu_stageR.tsv")
     stringtie = os.path.join("de_report", "stringtie_merged.gtf")
-    tpm = os.path.join("de_report", "de_tpm_transcript_counts.tsv")
-    # This will also add a gene name column to the "results_dge.tsv"
+    tpm = os.path.join("de_report", "unfiltered_tpm_transcript_counts.tsv")
+    filtered = os.path.join(
+        "de_report", "filtered_transcript_counts_with_genes.tsv")
+    unfiltered = os.path.join(
+        "de_report", "unfiltered_transcript_counts_with_genes.tsv")
+    gene_counts = os.path.join("de_report", "all_gene_counts.tsv")
+    # This will also add a gene name column to the above counts tsv files
     de_plots.de_section(
         stringtie=stringtie,
         dexseq=dexseq,
         dge=dge,
         dtu=dtu,
         tpm=tpm,
-        report=report)
+        report=report,
+        filtered=filtered,
+        unfiltered=unfiltered,
+        gene_counts=gene_counts)
 
 
 def main(args):
     """Run the entry point."""
-    sample_ids = args.sample_ids
-    sample_ids.sort()
-
     report = WFReport(
         "Transcript isoform report", "wf-transcriptomes",
         revision=args.revision, commit=args.commit)
 
-    # QC
     seq_stats_tabs(report, args.stats)
 
     if args.alignment_stats is not None:
-        df_aln_stats = load_sample_data(args.alignment_stats, sample_ids)
+        stats_dfs = []
+        for stats_file in args.alignment_stats:
+            df = pd.read_csv(stats_file, sep='\t+')
+            stats_dfs.append(df)
+        aln_stats_df = pd.concat(stats_dfs)
         section = report.add_section()
         section.markdown('''
           ### Read mapping summary
@@ -921,28 +854,22 @@ def main(args):
           [seqkit](https://bioinf.shenwei.me/seqkit/)
           `seqkit bam -s`''')
 
-        section.table(df_aln_stats)
+        section.table(aln_stats_df)
 
     if args.pychop_report is not None:
         pychopper_plots(report, args.pychop_report)
 
     # Results
     if args.gff_annotation is not None:
-        transcriptome_summary(
-            report, args.gff_annotation, sample_ids, denovo=args.denovo)
+        transcriptome_summary(report, args.gff_annotation)
 
     if args.gffcompare_dir is not None:
-        df_tmaps = gff_compare_plots(
+        gff_compare_plots(
             report,
-            [Path(x) for x in args.gffcompare_dir],
-            sample_ids)
+            [x for x in Path(args.gffcompare_dir).iterdir()])
 
-        if df_tmaps is not None:
-            # Skip this section. This needs some work
-            transcript_table(report, df_tmaps, args.isoform_table_nrows)
-
-    if args.cluster_qc_dirs is not None:
-        cluster_quality(args.cluster_qc_dirs, report, sample_ids)
+    if args.isoform_table is not None:
+        transcript_table(report, args.isoform_table, args.isoform_table_nrows)
 
     if args.de_report:
         de_section(report)
