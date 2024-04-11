@@ -34,12 +34,12 @@ lines <- readLines(file(ref_annotation), n=10000)
 # annotation type is gff3
 check_file_type <- sum(grepl("transcript_id=", lines))
 if (check_file_type != 0){
-    cat("Annotation file type is gff3.\n")
-    annotation_type <- "gff3"
+  cat("Annotation file type is gff3.\n")
+  annotation_type <- "gff3"
 } else {
-    # otherwise gtf
-    cat("Annotation file type is gtf.\n")
-    annotation_type <- "gtf"
+  # otherwise gtf
+  cat("Annotation file type is gtf.\n")
+  annotation_type <- "gtf"
 }
 
 # Transcript_id versions (eg. ENTXXX.1, eg. ENTXXX.2) represent how many times that transcript reference has been changed 
@@ -52,13 +52,13 @@ lines <- readLines(file(ref_annotation), n=100000)
 # Find transcript_ids in first 1000 lines and check if they contain dot (format eg. ENTXXX.1)
 check_version <- sum(grepl("transcript_id[^;]+\\.", lines))
 if (check_version != 0){
-        # we do not need to strip the count file rows if ref_annotation includes versions
-        cat("Annotation file transcript_ids include versions.\n")
-    } else {
-       # otherwise remove the versions
-        rownames(cts) <- lapply(rownames(cts),  sub, pattern = "\\.\\d+$", replacement = "")
-        cat("Annotation file transcript_ids do not include versions so also strip versions from the counts df.\n")
-    }
+  # we do not need to strip the count file rows if ref_annotation includes versions
+  cat("Annotation file transcript_ids include versions.\n")
+} else {
+  # otherwise remove the versions
+  rownames(cts) <- lapply(rownames(cts),  sub, pattern = "\\.\\d+$", replacement = "")
+  cat("Annotation file transcript_ids do not include versions so also strip versions from the counts df.\n")
+}
 
 cat("Loading annotation database.\n")
 txdb <- makeTxDbFromGFF(ref_annotation,  format = annotation_type)
@@ -84,12 +84,10 @@ cat("Filtering counts using DRIMSeq.\n")
 d <- dmDSdata(counts=counts, samples=coldata)
 trs_cts_unfiltered <- counts(d)
 
-d <- dmFilter(d, min_samps_gene_expr = min_samps_gene_expr, 
-              min_samps_feature_expr = min_samps_feature_expr,
-              min_gene_expr = min_gene_expr, 
-              min_feature_expr = min_feature_expr)
+d <- dmFilter(d, min_samps_gene_expr = min_samps_gene_expr, min_samps_feature_expr = min_samps_feature_expr,
+              min_gene_expr = min_gene_expr, min_feature_expr = min_feature_expr)
 
-cat("Building model matrix.\n") 
+cat("Building model matrix.\n")
 # check if ID is specified in sample_sheet, if so include in model matrix design
 # to get 'paired t-test'
 if("ID" %in% colnames(coldata))
