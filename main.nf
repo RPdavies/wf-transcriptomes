@@ -2,7 +2,6 @@
 
 /* This workflow is a adapted from two previous pipeline written in Snakemake:
 - https://github.com/nanoporetech/pipeline-nanopore-ref-isoforms
-- https://github.com/nanoporetech/pipeline-nanopore-denovo-isoforms
 */
 
 import groovy.json.JsonBuilder;
@@ -10,9 +9,8 @@ import nextflow.util.BlankSeparatedList;
 import java.util.ArrayList;
 nextflow.enable.dsl = 2
 
-include { fastq_ingress } from './lib/fastqingress'
+include { fastq_ingress } from './lib/ingress'
 include { reference_assembly } from './subworkflows/reference_assembly'
-include { denovo_assembly } from './subworkflows/denovo_assembly'
 include { gene_fusions } from './subworkflows/JAFFAL/gene_fusions'
 include { differential_expression } from './subworkflows/differential_expression'
 
@@ -21,6 +19,7 @@ OPTIONAL_FILE = file("$projectDir/data/OPTIONAL_FILE")
 process getVersions {
     label "isoforms"
     cpus 1
+    memory "2 GB"
     output:
         path "versions.txt"
     script:
@@ -38,8 +37,6 @@ process getVersions {
     seqkit version | head -n 1 | sed 's/ /,/' >> versions.txt
     stringtie --version | sed 's/^/stringtie,/' >> versions.txt
     gffcompare --version | head -n 1 | sed 's/ /,/' >> versions.txt
-    spoa --version | sed 's/^/spoa,/' >> versions.txt
-#     isONclust2 version | sed 's/ version: /,/' >> versions.txt
     """
 }
 
@@ -47,6 +44,7 @@ process getVersions {
 process getParams {
     label "isoforms"
     cpus 1
+    memory "2 GB"
     output:
         path "params.json"
     script:
@@ -62,6 +60,7 @@ process getParams {
 process decompress_ref {
     label "isoforms"
     cpus 1
+    memory "2 GB"
     input:
         path compressed_ref
     output:
@@ -75,6 +74,7 @@ process decompress_ref {
 process decompress_annotation {
     label "isoforms"
     cpus 1
+    memory "2 GB"
     input:
         path compressed_annotation
     output:
@@ -89,6 +89,7 @@ process decompress_annotation {
 process decompress_transcriptome {
     label "isoforms"
     cpus 1
+    memory "2 GB"
     input:
         path "compressed_ref.gz"
     output:
@@ -103,13 +104,14 @@ process decompress_transcriptome {
 process preprocess_ref_annotation {
     label "isoforms"
     cpus 1
+    memory "2 GB"
     input:
         path ref_annotation
     output:
-        path "ammended.${ref_annotation}"
+        path "amended.${ref_annotation}"
     """
     sed -i -e 's/transcript_id "";//g' ${ref_annotation}
-    mv ${ref_annotation} "ammended.${ref_annotation}"
+    mv ${ref_annotation} "amended.${ref_annotation}"
     """
 }
 
@@ -117,13 +119,14 @@ process preprocess_ref_annotation {
 process preprocess_ref_transcriptome {
     label "isoforms"
     cpus 1
+    memory "2 GB"
     input:
         path "ref_transcriptome"
     output:
-        path "ammended.${ref_transcriptome}"
+        path "amended.${ref_transcriptome}"
     """
     sed -i -e 's/|.*//' ${ref_transcriptome}
-    mv ${ref_transcriptome} "ammended.${ref_transcriptome}"
+    mv ${ref_transcriptome} "amended.${ref_transcriptome}"
     """
 }
 
@@ -137,21 +140,33 @@ process preprocess_reads {
 
     label "isoforms"
     cpus 4
-
+    memory "2 GB"
     input:
-        tuple val(meta), path(input_reads)
+        tuple val(meta), path('seqs.fastq.gz')
     output:
-         tuple val("${meta.alias}"), path("${meta.alias}_full_length_reads.fastq"), emit: full_len_reads
-         path '*.tsv',  emit: report
+        tuple val("${meta.alias}"),
+              path("${meta.alias}_pychopper_output/${meta.alias}_full_length_reads.fastq"),
+              emit: full_len_reads
+        tuple val("${meta.alias}"),
+              path("${meta.alias}_pychopper_output/"),
+              emit: pychopper_output
+        path("${meta.alias}_pychopper_output/pychopper.tsv"),
+              emit: report
     script:
+        def cdna_kit = params.cdna_kit.split("-")[-1]
+	    def extra_params = params.pychopper_opts ?: ''
         """
-        pychopper -t ${params.threads} ${params.pychopper_opts} ${input_reads} ${meta.alias}_full_length_reads.fastq
-        mv pychopper.tsv ${meta.alias}_pychopper.tsv
-        workflow-glue generate_pychopper_stats --data ${meta.alias}_pychopper.tsv --output .
+        pychopper -t ${params.threads} -k ${cdna_kit} -m ${params.pychopper_backend} ${extra_params} 'seqs.fastq.gz' ${meta.alias}_full_length_reads.fastq
+        workflow-glue generate_pychopper_stats --data pychopper.tsv --output .
 
         # Add sample id column
-        sed "1s/\$/\tsample_id/; 1 ! s/\$/\t${meta.alias}/" ${meta.alias}_pychopper.tsv > tmp
-        mv tmp ${meta.alias}_pychopper.tsv
+        sed "1s/\$/\tsample_id/; 1 ! s/\$/\t${meta.alias}/" pychopper.tsv > tmp
+        mv tmp pychopper.tsv
+
+
+        mkdir "${meta.alias}_pychopper_output/"
+        shopt -s extglob  # Allow extended pattern matching so we can exclude files from the mv
+        mv !("${meta.alias}_pychopper_output"|seqs.fastq.gz) "${meta.alias}_pychopper_output/"
         """
 }
 
@@ -161,6 +176,7 @@ process build_minimap_index{
     */
     label "isoforms"
     cpus params.threads
+    memory "31 GB"
 
     input:
         path reference
@@ -182,6 +198,7 @@ process split_bam{
 
     label 'isoforms'
     cpus params.threads
+    memory "2 GB"
 
     input:
         tuple val(sample_id), path(bam)
@@ -227,6 +244,7 @@ process assemble_transcripts{
     */
     label 'isoforms'
     cpus params.threads
+    memory "2 GB"
 
     input:
         tuple val(sample_id), path(bam), path(ref_annotation)
@@ -249,13 +267,15 @@ process merge_gff_bundles{
     Merge gff bundles into a single gff file per sample.
     */
     label 'isoforms'
+    cpus params.threads
+    memory "2 GB"
 
     input:
         tuple val(sample_id), path (gff_bundle)
     output:
-        tuple val(sample_id), path('*.gff'), emit: gff
+        tuple val(sample_id), path("${sample_id}.gff"), emit: gff
     script:
-    def merged_gff = "transcripts_${sample_id}.gff"
+    def merged_gff = "${sample_id}.gff"
     """
     echo '##gff-version 2' >> $merged_gff;
     echo '#pipeline-nanopore-isoforms: stringtie' >> $merged_gff;
@@ -276,22 +296,19 @@ process run_gffcompare{
     */
 
     label 'isoforms'
-
+    cpus 1
+    memory "2 GB"
     input:
        tuple val(sample_id), path(query_annotation)
        path ref_annotation
     output:
-        tuple val(sample_id), path("${sample_id}_gffcompare"), emit: gffcmp_dir
-        path ("${sample_id}_annotated.gtf"), emit: gtf, optional: true
+        tuple val(sample_id), path("${sample_id}"), emit: gffcmp_dir
+        path ("${sample_id}_annotated.gtf"), emit: gtf
+        tuple val(sample_id), path("${sample_id}_transcripts_table.tsv"),
+            emit: isoforms_table
     script:
-    def out_dir = "${sample_id}_gffcompare"
-
-    if (params.transcriptome_source == "denovo"){
-        """
-        mkdir $out_dir
-        """
-    } else {
-        """
+    def out_dir = "${sample_id}"
+    """
         mkdir $out_dir
         echo "Doing comparison of reference annotation: ${ref_annotation} and the query annotation"
 
@@ -301,20 +318,24 @@ process run_gffcompare{
         workflow-glue generate_tracking_summary --tracking $out_dir/str_merged.tracking \
             --output_dir ${out_dir} --annotation ${ref_annotation}
 
-        mv *.tmap $out_dir
-        mv *.refmap $out_dir
-        cp ${out_dir}/str_merged.annotated.gtf ${sample_id}_annotated.gtf
-        """
-    }
-}
+        mv *.tmap "${out_dir}"
+        mv *.refmap "${out_dir}"
+        cp "${out_dir}/str_merged.annotated.gtf" "${sample_id}_annotated.gtf"
 
+        # Make an isoform table for report and user output.
+        workflow-glue make_isoform_table \
+            --sample_id "${sample_id}" \
+            --gffcompare_dir "${out_dir}"
+        """
+}
 
 process get_transcriptome{
         /*
         Write out a transcriptome file based on the query gff annotations.
         */
         label 'isoforms'
-
+        cpus 1
+        memory "2 GB"
         input:
             tuple val(sample_id), path(transcripts_gff), path(gffcmp_dir), path(reference_seq)
         output:
@@ -323,6 +344,9 @@ process get_transcriptome{
         script:
         def transcriptome = "${sample_id}_transcriptome.fas"
         def merged_transcriptome = "${sample_id}_merged_transcriptome.fas"
+        // if no ref_annotation gffcmp_dir will be optional file
+        // so skip getting transcriptome FASTA from the annotated files.
+        if (params.ref_annotation){
         """
         gffread -g ${reference_seq} -w ${transcriptome} ${transcripts_gff}
         if  [ "\$(ls -A $gffcmp_dir)" ];
@@ -330,11 +354,18 @@ process get_transcriptome{
                 gffread -F -g ${reference_seq} -w ${merged_transcriptome} $gffcmp_dir/str_merged.annotated.gtf
         fi
         """
+        } else {
+        """
+        gffread -g ${reference_seq} -w ${transcriptome} ${transcripts_gff}
+        """
+        }
 }
 
 process merge_transcriptomes {
     // Merge the transcriptomes from all samples
     label 'isoforms'
+    cpus 2
+    memory "2 GB"
     input:
         path "query_annotations/*"
         path ref_annotation
@@ -354,34 +385,35 @@ process merge_transcriptomes {
     """
 }
 
-
 process makeReport {
 
     label "isoforms"
+    cpus 2
+    memory "4 GB"
 
     input:
         path versions
         path "params.json"
         path "pychopper_report/*"
         path"jaffal_csv/*"
-        val sample_ids
-        path per_read_stats
+        path "per_read_stats/?.gz"
         path "aln_stats/*"
-        path gffcmp_dir
+        path "gffcmp_dir/*"
         path "gff_annotation/*"
         path "de_report/*"
         path "seqkit/*"
+        path "isoforms_table/*"
     output:
-        path("wf-transcriptomes-*.html"), emit: report
-        // for DE analysis, a `gene_name` column will be added to
-        // `de_report/results_dge.tsv`
-        path "results_dge.tsv", emit: de_analysis, optional: true
-    script:
-        // Convert the sample_id arrayList.
-        sids = new BlankSeparatedList(sample_ids)
-        def report_name = "wf-transcriptomes-report.html"
-        def OPT_DENOVO = params.transcriptome_source == "denovo" ? "--denovo" : ''
-    """
+        path ("wf-transcriptomes-*.html"), emit: report
+        // If de analysis has been run output the counts files with gene name added.
+        path ("results_dge.tsv"), emit: results_dge, optional: true
+        path ("unfiltered_tpm_transcript_counts.tsv"), emit: tpm, optional: true
+        path ("unfiltered_transcript_counts_with_genes.tsv"), emit: unfiltered, optional: true
+        path ("filtered_transcript_counts_with_genes.tsv"), emit: filtered, optional: true
+        path ("all_gene_counts.tsv"), emit: gene_counts, optional: true
+    shell:
+        report_name = "wf-transcriptomes-report.html"
+    '''
     if [ -f "de_report/OPTIONAL_FILE" ]; then
         dereport=""
     else
@@ -389,10 +421,14 @@ process makeReport {
         mv de_report/*.g*f* de_report/stringtie_merged.gtf
     fi
     if [ -f "gff_annotation/OPTIONAL_FILE" ]; then
-        OPT_GFF=""
+        OPT_GFF_ANNOTATION=""
     else
-        OPT_GFF="--gffcompare_dir ${gffcmp_dir} --gff_annotation gff_annotation/*"
-        
+        OPT_GFF_ANNOTATION="--gff_annotation gff_annotation/*"
+    fi
+    if [ -f "gffcmp_dir/OPTIONAL_FILE" ]; then
+        OPT_GFFCMP_DIR=""
+    else
+        OPT_GFFCMP_DIR="--gffcompare_dir gffcmp_dir/"
     fi
     if [ -f "jaffal_csv/OPTIONAL_FILE" ]; then
         OPT_JAFFAL_CSV=""
@@ -409,19 +445,24 @@ process makeReport {
     else
         OPT_PC_REPORT="--pychop_report pychopper_report/*"
     fi
-    workflow-glue report --report $report_name \
-    --versions $versions \
+    if [ -f "isoforms_table/OPTIONAL_FILE" ]; then
+        OPT_ISO_TABLE=""
+    else
+        OPT_ISO_TABLE="--isoform_table isoforms_table"
+    fi
+    workflow-glue report --report !{report_name} \
+    --versions !{versions} \
     --params params.json \
-    \$OPT_ALN \
-    \$OPT_PC_REPORT \
-    --sample_ids $sids \
-    --stats $per_read_stats \
-    \$OPT_GFF \
-    --isoform_table_nrows $params.isoform_table_nrows \
-    \$OPT_JAFFAL_CSV \
-    $OPT_DENOVO \
-    \$dereport 
-    """
+    ${OPT_ALN} \
+    ${OPT_PC_REPORT} \
+    --stats per_read_stats/* \
+    ${OPT_GFF_ANNOTATION} \
+    ${OPT_ISO_TABLE} \
+    ${OPT_GFFCMP_DIR} \
+    --isoform_table_nrows !{params.isoform_table_nrows} \
+    ${OPT_JAFFAL_CSV} \
+    ${dereport}
+    '''
 }
 
 
@@ -429,6 +470,8 @@ process makeReport {
 // into it.
 process collectFastqIngressResultsInDir {
     label "isoforms"
+    cpus 1
+    memory "2 GB"
     input:
         // both the fastcat seqs as well as stats might be `OPTIONAL_FILE` --> stage in
         // different sub-directories to avoid name collisions
@@ -460,6 +503,8 @@ process collectFastqIngressResultsInDir {
 process output {
     // publish inputs to output directory
     label "isoforms"
+    cpus 1
+    memory "2 GB"
     publishDir (
         params.out_dir,
         mode: "copy",
@@ -529,79 +574,77 @@ workflow pipeline {
         }
 
      
-
+        results = Channel.empty()
         software_versions = getVersions()
         workflow_params = getParams()
         input_reads = reads.map{ meta, samples, stats -> [meta, samples]}
         sample_ids = input_reads.flatMap({meta,samples -> meta.alias})
-        stats = reads.map {
-            it[2] ? it[2].resolve('per-read-stats.tsv') : null
-        }
-        | collectFile ( keepHeader: true )
-        | ifEmpty ( OPTIONAL_FILE )
+        per_read_stats = reads.map{ meta, samples, stats -> stats.resolve("per-read-stats.tsv.gz") }.toList()
 
         if (!params.direct_rna){
             preprocess_reads(input_reads)
             full_len_reads = preprocess_reads.out.full_len_reads
             pychopper_report = preprocess_reads.out.report.collectFile(keepHeader: true)
+            pychopper_results_dir = preprocess_reads.out.pychopper_output.map{ it -> it[1]}
+            results = results.concat(pychopper_results_dir)
         }
         else{
             full_len_reads = input_reads.map{ meta, reads -> [meta.alias, reads]}
-            pychopper_report = file("$projectDir/data/OPTIONAL_FILE")
+            pychopper_report = OPTIONAL_FILE
         }
         if (params.transcriptome_source != "precomputed"){
+            build_minimap_index(ref_genome)
+            log.info("Doing reference based transcript analysis")
+            assembly = reference_assembly(build_minimap_index.out.index, ref_genome, full_len_reads)
         
-            if (params.transcriptome_source == "denovo"){
-                log.info("Doing de novo assembly")
-                log.info("WARNING: The `--transcriptome_source` denovo option may have unexpected results and errors. If possible it is preferable to use the reference-guided pipeline.")
-                assembly = denovo_assembly(full_len_reads, ref_genome)
-
-            } else {
-                build_minimap_index(ref_genome)
-                log.info("Doing reference based transcript analysis")
-                assembly = reference_assembly(build_minimap_index.out.index, ref_genome, full_len_reads)
-            }
             assembly_stats = assembly.stats.map{ it -> it[1]}.collect()
      
-            split_bam(assembly.bam)
+            split_bam(assembly.bam.map {sample_id, bam, bai -> [sample_id, bam]})
 
             assemble_transcripts(split_bam.out.bundles.flatMap(map_sample_ids_cls).combine(ref_annotation),use_ref_ann)
 
             merge_gff_bundles(assemble_transcripts.out.gff_bundles.groupTuple())
-            run_gffcompare(merge_gff_bundles.out.gff, ref_annotation)
-
-            if (params.transcriptome_source == "denovo"){
-                // Use the per-sample, de novo-assembled CDS
-                seq_for_transcriptome_build = assembly.cds
-            }else {
-                // For reference based assembly, there is only one reference
-                // So map this reference to all sample_ids
-                seq_for_transcriptome_build = sample_ids.flatten().combine(ref_genome)
+            // only run gffcompare if ref annotation provided. Otherwise create optional files and channels
+            if (params.ref_annotation){
+                run_gffcompare(merge_gff_bundles.out.gff, ref_annotation)
+                gff_compare_dir = run_gffcompare.out.gffcmp_dir
+                gff_compare = run_gffcompare.out.gffcmp_dir.map{ it -> it[1]}.collect()
+                isoforms_table = run_gffcompare.out.isoforms_table.map{ it -> it[1]}.collect()
+                // create per sample gff tuples with gff compare directories
+                gff_tuple = merge_gff_bundles.out.gff
+                .join(gff_compare_dir)
+            } else {
+                // create per sample gff tuples with optional files as no ref_annotation
+                optional_channel = Channel.fromPath("$projectDir/data/OPTIONAL_FILE")
+                gff_tuple = merge_gff_bundles.out.gff.combine(optional_channel)
+                gff_compare = OPTIONAL_FILE
+                isoforms_table = OPTIONAL_FILE
             }
-
+            // For reference based assembly, there is only one reference
+            // So map this reference to all sample_ids
+            seq_for_transcriptome_build = sample_ids.flatten().combine(ref_genome)
             get_transcriptome(
-                merge_gff_bundles.out.gff
-                .join(run_gffcompare.out.gffcmp_dir)
+                gff_tuple
                 .join(seq_for_transcriptome_build))
 
-            gff_compare = run_gffcompare.out.gffcmp_dir.map{ it -> it[1]}.collect()
+
             merge_gff = merge_gff_bundles.out.gff.map{ it -> it[1]}.collect()
-            results = Channel.empty()
-        }else
-        {
-            gff_compare = file("$projectDir/data/OPTIONAL_FILE")
-            merge_gff = file("$projectDir/data/OPTIONAL_FILE")
-            assembly_stats = file("$projectDir/data/OPTIONAL_FILE")
+            results = results.concat(assembly.bam.map {sample_id, bam, bai -> [bam, bai]}.flatten())
+        }
+        else{
+            gff_compare = OPTIONAL_FILE
+            isoforms_table = OPTIONAL_FILE
+            merge_gff = OPTIONAL_FILE
+            assembly_stats = OPTIONAL_FILE
             use_ref_ann = false
-            results = Channel.empty()
+ 
         }
         if (jaffal_refBase){
                 gene_fusions(full_len_reads, jaffal_refBase, jaffal_genome, jaffal_annotation)
-                jaffal_out = gene_fusions.out.results_csv.collectFile(keepHeader: true, name: 'jaffal.csv')
-            }else{
-                jaffal_out = file("$projectDir/data/OPTIONAL_FILE")
+                jaffal_out = gene_fusions.out.results_csv.map{ alias, csv -> csv}.collectFile(keepHeader: true, name: 'jaffal.csv')
+            } else{
+                jaffal_out = OPTIONAL_FILE
         }
-
 
         if (params.de_analysis){
             sample_sheet = file(params.sample_sheet, type:"file")
@@ -625,8 +668,8 @@ workflow pipeline {
             de_outputs = de.de_outputs
             counts = de.counts
         } else{
-            de_report = file("$projectDir/data/OPTIONAL_FILE")
-            count_transcripts_file = file("$projectDir/data/OPTIONAL_FILE")
+            de_report = OPTIONAL_FILE
+            count_transcripts_file = OPTIONAL_FILE
         }
         
         makeReport(
@@ -634,23 +677,22 @@ workflow pipeline {
             workflow_params,
             pychopper_report,
             jaffal_out,
-            input_reads.map{ meta, fastq -> meta.alias}.collect(),
-            stats,
+            per_read_stats,
             assembly_stats,
             gff_compare,
             merge_gff,
             de_report,
-            count_transcripts_file)
+            count_transcripts_file,
+            isoforms_table)
 
-        report = makeReport.out.report
-        
-     
-       
-        results = results.concat(makeReport.out.report)
+       report = makeReport.out.report
+
+       results = results.concat(report)
        
        if (use_ref_ann){
             results = run_gffcompare.output.gffcmp_dir.concat(
                       assembly.stats,
+                      run_gffcompare.out.isoforms_table,
                       get_transcriptome.out.transcriptome.flatMap(map_sample_ids_cls))
                       .map {it -> it[1]}
                       .concat(results)
@@ -664,22 +706,6 @@ workflow pipeline {
                       .concat(results)
 
         }
-        if (params.transcriptome_source == "denovo"){
-            results = assembly.cds.concat(
-                       assembly.stats,
-                      seq_for_transcriptome_build,
-                      get_transcriptome.out.transcriptome.flatMap(map_sample_ids_cls),
-                      assembly.opt_qual_ch.flatMap {
-                          it ->
-                          l = []
-                          for (x in it[1..-1]){
-                              l.add(tuple(it[0], x))
-                          }
-                        return l
-                      })
-                      .map {it -> it[1]}
-                      .concat(results)
-        }
         if (params.jaffal_refBase){
             results = results
                 .concat(gene_fusions.out.results
@@ -689,12 +715,17 @@ workflow pipeline {
        results = results.map{ [it, null] }.concat(fastq_ingress_results.map { [it, "fastq_ingress_results"] })
         
         if (params.de_analysis){
-           de_update = makeReport.out.de_analysis
-           de_results = report.concat(transcriptome, de_outputs.flatten(), counts.flatten(), de_update)
-           results = results.concat(de_results.map{ [it, "de_analysis"] })
+           de_results = report.concat(
+            transcriptome, de_outputs.flatten(), counts.flatten(),
+            makeReport.out.results_dge,  makeReport.out.tpm,
+            makeReport.out.filtered,  makeReport.out.unfiltered,
+            makeReport.out.gene_counts)
+            // Output de_analysis results in the dedicated directory.
+            results = results.concat(de_results.map{ [it, "de_analysis"] })
         }
 
         results.concat(workflow_params.map{ [it, null]})
+
        
     emit:
         results
@@ -704,9 +735,7 @@ workflow pipeline {
 WorkflowMain.initialise(workflow, params, log)
 workflow {
 
-    if (params.disable_ping == false) {
-            Pinguscript.ping_post(workflow, "start", "none", params.out_dir, params)
-    }
+    Pinguscript.ping_start(nextflow, workflow, params)
 
     fastq = file(params.fastq, type: "file")
 
@@ -732,10 +761,10 @@ workflow {
             error = "--ref_genome: File doesn't exist, check path."
         }
     }else {
-        ref_genome = file("$projectDir/data/OPTIONAL_FILE")
+        ref_genome = OPTIONAL_FILE
     }
-    if (params.transcriptome_source == "denovo" && params.ref_annotation) {
-        error = "Reference annotation with de denovo assembly is not supported"
+    if (params.containsValue("denovo")) {
+        error = "Denovo transcriptome source is no longer supported. Please use the reference-guided or precomputed options."
     }
 
     if (params.ref_annotation){
@@ -746,7 +775,7 @@ workflow {
         }
         use_ref_ann = true
     }else{
-        ref_annotation= file("$projectDir/data/OPTIONAL_FILE")
+        ref_annotation= OPTIONAL_FILE
         use_ref_ann = false
     }
     if (params.jaffal_refBase){
@@ -757,20 +786,24 @@ workflow {
      }else{
         jaffal_refBase = null
      }
-    ref_transcriptome = file("$projectDir/data/OPTIONAL_FILE")
+    ref_transcriptome = OPTIONAL_FILE
     if (params.ref_transcriptome){
         log.info("Reference Transcriptome provided will be used for differential expression.")
         ref_transcriptome = file(params.ref_transcriptome, type:"file")
     }
     if (params.de_analysis){
         if (!params.ref_annotation){
-            error = "You must provide a reference annotation."
+            error = "When running in --de_analysis mode you must provide a reference annotation."
         }
         if (!params.sample_sheet){
             error = "You must provide a sample_sheet with at least alias and condition columns."
         }
         if (params.containsKey("condition_sheet")) {
         error = "Condition sheets have been deprecated. Please add a 'condition' column to your sample sheet instead. Check the quickstart for more information."
+        }
+    } else{
+        if (!params.ref_annotation){
+            log.info("Warning: As no --ref_annotation was provided, the output transcripts will not be annotated.")
         }
     }
     if (error){
@@ -781,7 +814,7 @@ workflow {
         "sample":params.sample,
         "sample_sheet":params.sample_sheet,
         "analyse_unclassified":params.analyse_unclassified,
-        "fastcat_stats": true,
+        "stats": true,
         "fastcat_extra_args": ""])
 
         pipeline(reads, ref_genome, ref_annotation,
@@ -792,11 +825,9 @@ workflow {
     }
 }
 
-if (params.disable_ping == false) {
-    workflow.onComplete {
-        Pinguscript.ping_post(workflow, "end", "none", params.out_dir, params)
-    }
-    workflow.onError {
-        Pinguscript.ping_post(workflow, "error", "$workflow.errorMessage", params.out_dir, params)
-    }
+workflow.onComplete {
+    Pinguscript.ping_complete(nextflow, workflow, params)
+}
+workflow.onError {
+    Pinguscript.ping_error(nextflow, workflow, params)
 }

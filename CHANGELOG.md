@@ -4,6 +4,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.1]
+### Changed
+- Improved handling of different annotation file types (eg. `.gtf/.gff/.gff3`) in `de_analysis` mode.
+- Improved handling of annotation files that do not contain version numbers in transcript_id (such as gtf's from Ensembl).
+### Fixed
+- Differential expression failing with 10 or more samples.
+- Regression causing the DE analysis numeric parameters to not be evaluated correctly.
+
+## [v1.1.0]
+### Changed
+- Improve documentation around filtering of transcripts done before DTU analysis.
+- Renamed files:
+  -  `de_analysis/all_counts_filtered.tsv` to `de_analysis/filtered_transcript_counts_with_genes.tsv`
+  -  `de_analysis/de_tpm_transcript_counts.tsv` to `de_analysis/unfiltered_tpm_transcript_counts.tsv`
+- Minimum memory requirements to `32 GB`.
+### Added
+- Published isoforms table to output directory.
+- Output additional `de_analysis/cpm_gene_counts.tsv` with counts per million gene counts.
+- Output additional `de_analysis/unfiltered_transcript_counts_with_genes.tsv` with unfiltered transcript counts with associated gene IDs.
+- Add gene name column to the de_analysis counts TSV files.
+### Fixed
+- Mapping stage using a single thread only.
+### Changed
+- More memory assigned to the fusion detection process.
+- When no `--ref_annotation` is provided the workflow will still run but the output transcripts will not be annotated. However `--de_analysis` mode still requires a `--ref_annotation`.
+
+## [v1.0.0]
+### Added
+- Published minimap2 and pychopper results to output directory.
+- Two extra pychopper parameters `--cdna_kit` and `--pychopper_backend`. `--pychopper_options` is still available to define any other options.
+- Memory requirements for each process.
+### Changed
+- Documentation.
+### Fixed
+- When Jaffa is run only output one report.
+
+## [v0.4.2]
+### Changed
+- Sample sheet must include a `control` type to indicate which samples are the reference for the differential expression pipeline.
+### Removed
+- Default local executor CPU and RAM limits.
+
+## [v0.4.1]
+### Changed
+- Updated docker container with Pychopper to support LSK114.
+
+## [v0.4.0]
+### Fixed
+- Remove dead links from README
+### Removed
+- Denovo `--transcriptome_source` option.
+
 ## [v0.3.1]
 ### Added
 - Handling for input reference transcriptome headers that contain `|`

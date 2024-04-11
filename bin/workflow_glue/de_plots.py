@@ -237,11 +237,29 @@ def dtu_section(dtu_file, section, gt_dic, ge_dic):
     section.table(dtu_results.loc[dtu_pvals.index])
 
 
-def dge_names(dge_file, geid_gname):
-    """Add gene name column to DGE tsv."""
+def copy_dge_add_gene_names(dge_file, geid_gname, newfile_name):
+    """Add gene name column to DGE TSV with gene ID to gene Name dict."""
     dge_results = pd.read_csv(dge_file, sep='\t')
-    dge_results["gene_name"] = dge_results.index.map(lambda x: geid_gname.get(x))
-    dge_results.to_csv('results_dge.tsv', index=True, index_label="gene_id")
+    column_to_move = dge_results.index.map(
+        lambda x: geid_gname.get(x))
+    dge_results.insert(0, "gene_name", column_to_move)
+    dge_results.to_csv(newfile_name, index=True, index_label="gene_id",  sep="\t")
+
+
+def copy_filtered_add_gene_names(unfiltered_file, geid_gname, newfile_name):
+    """Use gene id to gene name dict to add name column to counts TSV."""
+    unfiltered = pd.read_csv(unfiltered_file, sep='\t')
+    unfiltered.insert(1, "gene_name",  unfiltered.gene_id.map(
+        lambda x: geid_gname.get(x)))
+    unfiltered.to_csv(newfile_name, index=False, sep='\t')
+
+
+def copy_tpm_add_gene_names(tpm_file, txid_gname, newfile_name):
+    """Use transcript id to gene name dict to add name column to TPM TSV."""
+    tpm = pd.read_csv(tpm_file, sep='\t')
+    tpm.insert(1, "gene_name", tpm.Reference.map(
+        lambda x: txid_gname.get(x)))
+    tpm.to_csv(newfile_name, index=False, sep='\t')
 
 
 def dge_section(dge_file, section, ids_dic):
@@ -361,7 +379,8 @@ def get_translations(gtf):
 
 def de_section(
         stringtie, dge, dexseq, dtu,
-        tpm, report):
+        tpm, report, filtered, unfiltered,
+        gene_counts):
     """Differential expression sections."""
     section = report.add_section()
     section.markdown("# Differential expression.")
@@ -385,8 +404,17 @@ Find the full sequences of any transcripts in the
     section.table(alignment_summary_df, key='alignment-stats', index=True)
     salmon_table(tpm, section)
     gene_txid, gene_name, geid_gname = get_translations(stringtie)
+    # Use dictionaries to add gene names to the counts tsv files to help users
+    copy_dge_add_gene_names(dge, geid_gname, "results_dge.tsv")
+    copy_dge_add_gene_names(gene_counts, geid_gname, "all_gene_counts.tsv")
+    copy_filtered_add_gene_names(
+        filtered, geid_gname, "filtered_transcript_counts_with_genes.tsv")
+    copy_filtered_add_gene_names(
+        unfiltered, geid_gname, "unfiltered_transcript_counts_with_genes.tsv")
+    copy_tpm_add_gene_names(tpm, gene_txid, "unfiltered_tpm_transcript_counts.tsv")
+
+    # Add tables to report
     dge_section(dge, section, gene_name)
-    dge_names(dge, geid_gname)
     dexseq_section(dexseq, section, gene_name)
     dtu_section(dtu, section, gene_txid, gene_name)
     # missing dtu plots at the moment as too many
