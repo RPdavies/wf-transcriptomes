@@ -20,6 +20,8 @@ gene_cts <- read.delim("../../nextflow/de_analysis/all_gene_counts.tsv")
 #design <- model.matrix(~ 0 + ID + condition, data = coldata)
 #design <- model.matrix(~ 0 + condition, data = coldata)
 
+# check if ID is specified in sample_sheet, if so include in model
+# to get 'paired t-test'
 if("ID" %in% colnames(coldata))
   design <- model.matrix(~ ID + condition, data = coldata) else
     design <- model.matrix(~ condition, data = coldata)
